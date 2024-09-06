@@ -1,9 +1,12 @@
 image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+
 variables:
   TF_ROOT: ${CI_PROJECT_DIR}
   TF_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${CI_PROJECT_NAME}
-  AWS_ACCESS_KEY_ID: 
-  AWS_SECRET_ACCESS_KEY: 
+  HCP_API_ENDPOINT: https://api.cloud.hashicorp.com
+  HCP_ORGANIZATION_ID: ""
+  HCP_PROJECT_ID: ""
+  HCP_APP_NAME: ""
 
 cache:
   key: example-production
@@ -12,6 +15,43 @@ cache:
 
 before_script:
   - cd ${TF_ROOT}
+  - |
+    # Authenticate with HCP and retrieve secrets
+    HCP_API_TOKEN=$(curl --location "https://auth.idp.hashicorp.com/oauth2/token" \
+    --header "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode "client_id=$HCP_CLIENT_ID" \
+    --data-urlencode "client_secret=$HCP_CLIENT_SECRET" \
+    --data-urlencode "grant_type=client_credentials" \
+    --data-urlencode "audience=https://api.hashicorp.cloud" | jq -r .access_token)
+    
+    # Retrieve secrets from HCP Vault
+    SECRETS=$(curl \
+    --location "${HCP_API_ENDPOINT}/secrets/2023-06-13/organizations/${HCP_ORGANIZATION_ID}/projects/${HCP_PROJECT_ID}/apps/${HCP_APP_NAME}/open" \
+    --request GET \
+    --header "Authorization: Bearer $HCP_API_TOKEN")
+    
+    # Extract AWS credentials from the array of secrets
+    export AWS_ACCESS_KEY_ID=$(echo $SECRETS | jq -r '.secrets[] | select(.name == "AWS_ACCESS_KEY_ID") | .version.value')
+    export AWS_SECRET_ACCESS_KEY=$(echo $SECRETS | jq -r '.secrets[] | select(.name == "AWS_SECRET_ACCESS_KEY") | .version.value')
+    
+    # Debug: Print the structure of the secrets (without revealing values)
+    echo "Secrets structure:"
+    echo $SECRETS | jq 'del(.secrets[].version.value)'
+    
+    # Verify AWS credentials are set
+    if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+      echo "Error: AWS credentials are not set properly"
+      echo "AWS_ACCESS_KEY_ID is empty: $([ -z "$AWS_ACCESS_KEY_ID" ] && echo "true" || echo "false")"
+      echo "AWS_SECRET_ACCESS_KEY is empty: $([ -z "$AWS_SECRET_ACCESS_KEY" ] && echo "true" || echo "false")"
+      exit 1
+    else
+      echo "AWS credentials are set"
+      echo "AWS_ACCESS_KEY_ID is set to: ${AWS_ACCESS_KEY_ID:0:5}..."
+      echo "AWS_SECRET_ACCESS_KEY is set to: ${AWS_SECRET_ACCESS_KEY:0:5}..."
+    fi
+    
+    # Debug: Print AWS-related environment variables
+    env | grep AWS
 
 stages:
   - prepare
@@ -22,14 +62,11 @@ stages:
 init:
   stage: prepare
   script:
-    - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-    - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
     - gitlab-terraform init
 
 validate:
   stage: validate
   script:
-    - gitlab-terraform init
     - gitlab-terraform validate
 
 plan:
@@ -44,13 +81,11 @@ plan:
     reports:
       terraform: ${TF_ROOT}/plan.json
 
-# Separate apply job for manual launching Terraform as it can be destructive
-# action.
 apply:
   stage: deploy
   environment:
     name: production
   script:
-    - gitlab-terraform apply
+    - gitlab-terraform apply -auto-approve
   dependencies:
     - plan
