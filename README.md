@@ -19,3 +19,13 @@ The pipeline uses the official Terraform Docker image provided by GitLab.
 
 ```yaml
 image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+
+## AWS Changes
+1. bucket name
+2. dynamo db table (LockID)
+
+## Gitlab(CICD Variable)
+1. Variable (HCP_CLIENT_ID) and (HCP_CLIENT_SECRET)
+
+## Vault
+1. Create Variable by name of AWS_ACCESS_KEY_ID , AWS_SECRET_ACCESS_KEY
